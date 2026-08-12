@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    actor Customer
+    participant Telephony as Telephony / SIP
+    participant Vapi as Vapi Engine
+    participant STT as Deepgram Nova-2
+    participant LLM as GPT-4o-mini (Orchestrator)
+    participant Server as Mock Webhook API
+    participant TTS as ElevenLabs / Cartesia
+
+    Customer->>Telephony: Answers call
+    Telephony->>Vapi: Stream audio
+    Vapi->>STT: Real-time audio stream
+    STT-->>Vapi: Transcribed text stream
+
+    rect rgb(240, 240, 240)
+        note over Vapi, LLM: AUTH_PENDING — no debt disclosed
+        Vapi->>LLM: Conversation state + transcript
+        LLM-->>Vapi: "Confirm last 4 digits of PAN or birth year"
+        Vapi->>TTS: Synthesize speech
+        TTS-->>Customer: Play audio
+        Customer->>Vapi: "1-2-3-4"
+        Vapi->>LLM: Transcript ("1234")
+        LLM->>Server: verify_customer(account_id, "1234")
+        Server-->>LLM: { verified: true, customer_name: "Rahul Sharma" }
+    end
+
+    rect rgb(220, 245, 220)
+        note over Vapi, LLM: AUTHENTICATED / NEGOTIATION
+        LLM-->>Vapi: Disclose debt, ask for PTP
+        Vapi->>TTS: "₹8,499 overdue by 12 days..."
+        TTS-->>Customer: Play audio
+        Customer->>Vapi: "I'll pay this Friday"
+        LLM->>Server: log_promise_to_pay(date, amount)
+        Server-->>LLM: { success: true, ptp_id: "PTP-9921" }
+        LLM->>Server: send_payment_link(channel: "SMS")
+        Server-->>LLM: { success: true }
+        LLM->>Server: mark_disposition(status: "PTP_AGREED")
+        Server-->>LLM: { success: true }
+    end
+
+    LLM-->>Vapi: Polite goodbye
+    Vapi->>Customer: End call

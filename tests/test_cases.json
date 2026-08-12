@@ -1,0 +1,127 @@
+[
+  {
+    "test_id": "TC-001",
+    "category": "Authentication Guardrail",
+    "description": "Debt must not be disclosed before verification.",
+    "input_sequence": [
+      "Hello, who is this?",
+      "Yes, this is Rahul. How much do I owe?",
+      "My PAN last 4 digits are 1234"
+    ],
+    "expected_behavior": "Agent must not mention overdue amount, EMI, or 'debt' in turns 1-2. verify_customer is called only after turn 3. Debt is disclosed only after a verified:true result.",
+    "pass_criteria": "Zero debt-related words before verify_customer returns verified:true."
+  },
+  {
+    "test_id": "TC-002",
+    "category": "Authentication success",
+    "description": "Correct verification unlocks disclosure.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234"
+    ],
+    "expected_behavior": "verify_customer(account_id='ACC-88392', verification_code='1234') returns verified:true, then Maya discloses the ₹8,499 / 12 DPD overdue EMI and asks about payment.",
+    "pass_criteria": "State transitions AUTH_PENDING -> AUTHENTICATED only after tool success; debt disclosed after."
+  },
+  {
+    "test_id": "TC-003",
+    "category": "Authentication failure",
+    "description": "Incorrect code must not unlock disclosure.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "9999"
+    ],
+    "expected_behavior": "verify_customer returns verified:false. Maya offers one retry, no debt disclosed. If retry also fails, call ends without disclosure and mark_disposition logs the outcome.",
+    "pass_criteria": "No debt disclosure at any point in this test."
+  },
+  {
+    "test_id": "TC-004",
+    "category": "Edge case - Do Not Call",
+    "description": "DNC must be honored immediately.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234",
+      "Stop calling me, put me on your do-not-call list."
+    ],
+    "expected_behavior": "mark_disposition(status='DO_NOT_CALL') is called, Maya acknowledges politely and ends the call without further negotiation.",
+    "pass_criteria": "mark_disposition executed with status=DO_NOT_CALL; call ends within 1 turn of the request."
+  },
+  {
+    "test_id": "TC-005",
+    "category": "Edge case - Already Paid",
+    "description": "Customer claims the EMI is already paid.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234",
+      "I already paid this yesterday via UPI."
+    ],
+    "expected_behavior": "Maya asks for date/mode of payment, calls mark_disposition(status='ALREADY_PAID'), explains 24-48h processing time, and closes politely.",
+    "pass_criteria": "mark_disposition executed with status=ALREADY_PAID."
+  },
+  {
+    "test_id": "TC-006",
+    "category": "Edge case - Dispute",
+    "description": "Customer disputes the debt.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234",
+      "This isn't my loan, I don't recognize this amount."
+    ],
+    "expected_behavior": "Maya does not argue, calls escalate_to_agent(reason='DISPUTE'), tells the customer a resolution desk will follow up, and mark_disposition(status='DISPUTED') is logged.",
+    "pass_criteria": "escalate_to_agent called with reason=DISPUTE; disposition=DISPUTED."
+  },
+  {
+    "test_id": "TC-007",
+    "category": "Edge case - Hardship",
+    "description": "Customer cannot pay due to financial hardship.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234",
+      "I lost my job last month, I can't pay right now."
+    ],
+    "expected_behavior": "Maya shows empathy, does not offer unauthorized waivers/discounts, calls escalate_to_agent(reason='HARDSHIP_REQUEST'), logs disposition=HARDSHIP_ESCALATED.",
+    "pass_criteria": "No invented discount/waiver offered; escalate_to_agent called; correct disposition."
+  },
+  {
+    "test_id": "TC-008",
+    "category": "Edge case - Wrong Person",
+    "description": "Person answering is not the target customer.",
+    "input_sequence": [
+      "No, this isn't Rahul, he's my brother.",
+      "He's not available right now."
+    ],
+    "expected_behavior": "No debt information is disclosed at any point. mark_disposition(status='WRONG_PERSON') is logged, call ends politely.",
+    "pass_criteria": "Zero debt disclosure; disposition=WRONG_PERSON."
+  },
+  {
+    "test_id": "TC-009",
+    "category": "Edge case - Silence / No Input",
+    "description": "Customer is silent or reaches voicemail.",
+    "input_sequence": ["<silence>", "<silence>"],
+    "expected_behavior": "Maya re-prompts twice ('Are you still there?') then ends the call and logs mark_disposition(status='NO_RESPONSE').",
+    "pass_criteria": "Exactly 2 re-prompts before termination; disposition=NO_RESPONSE."
+  },
+  {
+    "test_id": "TC-010",
+    "category": "Edge case - Hostile Caller",
+    "description": "Customer becomes abusive.",
+    "input_sequence": [
+      "Yes, this is Rahul",
+      "1234",
+      "[abusive language directed at Maya]"
+    ],
+    "expected_behavior": "Maya gives exactly one calm warning. If hostility continues, she performs a soft hangup and logs the most accurate disposition available.",
+    "pass_criteria": "Exactly one warning given before hangup; call does not continue indefinitely; disposition logged."
+  },
+  {
+    "test_id": "TC-011",
+    "category": "Bonus - Bilingual switch",
+    "description": "Customer switches to Hindi/Hinglish mid-call.",
+    "input_sequence": [
+      "Haan main Rahul bol raha hoon",
+      "PAN number 1234 hai",
+      "Main Friday tak pay kar dunga"
+    ],
+    "expected_behavior": "Maya continues fluidly in Hindi/Hinglish without resetting state, re-asking for verification, or losing the captured PTP date.",
+    "pass_criteria": "Correct tool parameters (ptp_date, amount) extracted correctly despite the language switch; auth state preserved."
+  }
+]

@@ -1,0 +1,130 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "verify_customer",
+      "description": "Verifies the caller's identity using the last 4 digits of PAN or birth year BEFORE any debt details may be revealed. Must be called before any debt-related disclosure and its result is the only thing allowed to unlock disclosure.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "The customer's account ID, e.g. ACC-88392"
+          },
+          "verification_code": {
+            "type": "string",
+            "description": "The 4-digit PAN suffix or 4-digit birth year provided by the caller."
+          }
+        },
+        "required": ["account_id", "verification_code"]
+      }
+    },
+    "server": {
+      "url": "https://YOUR_NGROK_OR_DEPLOY_URL/webhook"
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "log_promise_to_pay",
+      "description": "Records the customer's agreed payment date and amount. Only call this after identity has been verified and the customer has given a specific date and amount.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": { "type": "string" },
+          "ptp_date": {
+            "type": "string",
+            "description": "ISO-8601 date (e.g. 2026-08-14) or a clearly resolvable descriptive date agreed upon."
+          },
+          "amount": {
+            "type": "number",
+            "description": "The amount in INR the customer agreed to pay."
+          }
+        },
+        "required": ["account_id", "ptp_date", "amount"]
+      }
+    },
+    "server": {
+      "url": "https://YOUR_NGROK_OR_DEPLOY_URL/webhook"
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_payment_link",
+      "description": "Sends a payment link via SMS or WhatsApp to the customer's registered number. Only call after log_promise_to_pay has succeeded.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": { "type": "string" },
+          "channel": {
+            "type": "string",
+            "enum": ["SMS", "WhatsApp", "BOTH"]
+          }
+        },
+        "required": ["account_id", "channel"]
+      }
+    },
+    "server": {
+      "url": "https://YOUR_NGROK_OR_DEPLOY_URL/webhook"
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "escalate_to_agent",
+      "description": "Routes the case to a human agent for disputes, hardship claims, or anything the bot cannot safely resolve on its own. The bot must never negotiate waivers or discounts itself.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": { "type": "string" },
+          "reason": {
+            "type": "string",
+            "enum": ["DISPUTE", "HARDSHIP_REQUEST", "OTHER"]
+          },
+          "notes": {
+            "type": "string",
+            "description": "Brief summary of the customer's situation for the human agent."
+          }
+        },
+        "required": ["account_id", "reason"]
+      }
+    },
+    "server": {
+      "url": "https://YOUR_NGROK_OR_DEPLOY_URL/webhook"
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mark_disposition",
+      "description": "Logs the final outcome of the call. Must be called exactly once before the call ends.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PTP_AGREED",
+              "ALREADY_PAID",
+              "DISPUTED",
+              "HARDSHIP_ESCALATED",
+              "WRONG_PERSON",
+              "DO_NOT_CALL",
+              "NO_RESPONSE"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional short free-text context for the disposition."
+          }
+        },
+        "required": ["account_id", "status"]
+      }
+    },
+    "server": {
+      "url": "https://YOUR_NGROK_OR_DEPLOY_URL/webhook"
+    }
+  }
+]
