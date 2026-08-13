@@ -13,15 +13,15 @@ negotiates a resolution, and logs a disposition — all inside fair-collection n
 This repo contains both assignment deliverables:
 
 - **Task 1 — HLD:** [`docs/HLD_Document.md`](docs/HLD_Document.md) + [`docs/System_Architecture.png`](docs/System_Architecture.png) (diagram; [`.mmd`](docs/System_Architecture.mmd) source also included).
-- **Task 2 — Working Vapi build:** [`vapi/system_prompt.txt`](vapi/system_prompt.txt), [`vapi/tool_definitions.json`](vapi/tool_definitions.json), and a mock webhook backend in [`mock-server/`](mock-server).
+- **Task 2 — Working Vapi build:** [`vapi/system_prompt.txt`](vapi/system_prompt.txt), [`vapi/tool_definitions.json`](vapi/tool_definitions.json), and a mock API backend in [`mock-server/`](mock-server).
 
-The one non-negotiable design rule everything else hangs off: **Maya cannot say anything about the loan,
+The key design rule is: **Maya cannot say anything about the loan,
 EMI, amount, or days overdue until the `verify_customer` tool has returned `verified: true`.** This is
 enforced in two layers, not one:
 - **Prompt-level:** the system prompt makes disclosure conditional on tool output, never on how the
   conversation "feels."
 - **Backend-level (the actual hard gate):** the mock server tracks authentication per call session
-  (`CALL_STATE`, keyed by Vapi's call ID) and rejects `log_promise_to_pay`, `send_payment_link`, and
+  (`CALL_STATE`, keyed by a call/session identifier supplied to the API when available) and rejects `log_promise_to_pay`, `send_payment_link`, and
   `escalate_to_agent` outright with a `NOT_AUTHENTICATED` error if `verify_customer` hasn't succeeded for
   that session — regardless of what the LLM sends. This means authentication can't be talked past even in
   principle, not just "the prompt tells it not to." See HLD §5 and `mock-server/server.js`.
@@ -42,7 +42,7 @@ entities, tool schemas, and the edge-case matrix are all in [`docs/HLD_Document.
 
 ## 3. Setup
 
-### 3.1 Mock webhook server
+### 3.1 Mock API server
 
 ```bash
 cd mock-server
@@ -61,12 +61,12 @@ ngrok http 3000
 Sanity-check it directly:
 
 ```bash
-curl -X POST http://localhost:3000/webhook \
+curl -X POST http://localhost:3000/api/verify_customer \
   -H "Content-Type: application/json" \
-  -d '{"message":{"type":"tool-calls","toolCalls":[{"id":"c1","function":{"name":"verify_customer","arguments":{"account_id":"ACC-88392","verification_code":"1234"}}}]}}'
+  -d '{"account_id":"ACC-88392","verification_code":"1234","call_id":"local-test"}'
 ```
 
-You should get back `{"results":[{"toolCallId":"c1","result":"{\"verified\":true,...}"}]}`. There's also a
+You should get back a response containing `{"verified":true,...}`. There's also a
 `GET /logs` endpoint that dumps everything logged so far, `GET /call-state` to inspect which call sessions
 are currently authenticated (useful for proving the auth gate is real, not just prompt talk), and
 `GET /health` for a quick liveness check.
@@ -88,7 +88,7 @@ succeeds. This is what makes authentication state-enforced rather than merely su
 6. **First message:** `Hello, this is Maya calling from Kapture Finance. Am I speaking with Mr. Rahul Sharma?`
 7. Paste the contents of [`vapi/system_prompt.txt`](vapi/system_prompt.txt) into the system prompt field.
 8. Under **Tools**, import [`vapi/tool_definitions.json`](vapi/tool_definitions.json) (or add the five
-   functions manually) and point every tool's server URL at your ngrok/deployed `/webhook` endpoint.
+   functions manually) and point every tool's server URL at your matching ngrok/deployed `/api/...` endpoint for each tool.
 9. Start a **Web Call** from the Vapi dashboard (fastest for testing) or connect a phone number.
 
 ---
@@ -138,13 +138,17 @@ The mock server's tool handlers were smoke-tested directly with `curl` against a
 
 ## 7. Demo Instructions
 
+For the exact step-by-step path from "code on disk" to a recorded live call — ngrok setup, Vapi dashboard
+configuration, the critical pre/post-auth security test, and both required recordings — see
+[`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md). Short version:
+
 Record 2–4 minutes covering:
 1. **Happy path:** greeting → identity confirmation → verification (`1234`) → debt disclosure → PTP
    negotiation → `log_promise_to_pay` → `send_payment_link` → `mark_disposition(PTP_AGREED)` → close.
 2. **One edge case** — Do Not Call is the clearest one to demo since it shows a hard compliance behavior
    in action, but Already Paid or Dispute work too.
 
-`[Link to demo recording — add before submission]`
+**Loom Demo:** https://www.loom.com/share/f4452985ac1f41deb7ca5c5f1c71c679
 
 ---
 
@@ -165,10 +169,7 @@ Record 2–4 minutes covering:
 
 ## 9. What Broke / How I Debugged It
 
-- Early on, the mock server's `/webhook` handler returned a bare JSON object instead of the
-  `{"results":[{"toolCallId, result}]}` shape Vapi expects for tool-call responses — Vapi silently ignored
-  the tool result until I matched the exact contract. Fixed by checking Vapi's tool-call response docs and
-  testing the shape directly with `curl` before wiring up a live call.
+- Early on, the tool configuration did not match the backend routes. The server exposed REST-style `/api/...` endpoints while the JSON definitions still referenced `/webhook`. I corrected the tool URLs so each function points to its exact API route and smoke-tested the endpoints directly before the live demo.
 - Tested each tool handler in isolation with `curl` payloads shaped like real Vapi `tool-calls` events
   before ever placing a Vapi call — this caught the response-shape bug above without burning call minutes.
 - On review, I caught that the backend accepted protected tool calls (`log_promise_to_pay`,
@@ -182,6 +183,9 @@ Record 2–4 minutes covering:
   tool-call webhook auth, voice selection, or STT language settings.]
 
 ## 10. Known Limitations
+
+- **Call/session ID propagation:** In this Vapi demo configuration, the REST tool payloads do not consistently include a stable Vapi call identifier. The mock server therefore accepts an explicit `call_id`/`session_id` when available and otherwise falls back to `missing-call-id`. Backend authentication enforcement is demonstrated with an explicit shared `call_id` in smoke tests. In production, the platform call ID should be explicitly propagated into every tool request and authentication state should be keyed by that stable identifier.
+
 
 - Authentication state (`CALL_STATE`) lives in a plain in-memory object on a single server process — it
   resets on restart and wouldn't survive scaling to multiple webhook instances. A production version needs
@@ -216,7 +220,8 @@ kapture-collections-voicebot/
 ├── docs/
 │   ├── HLD_Document.md          # Task 1 — full high-level design
 │   ├── System_Architecture.png  # architecture/pipeline diagram
-│   └── System_Architecture.mmd  # Mermaid sequence diagram source
+│   ├── System_Architecture.mmd  # Mermaid sequence diagram source
+│   └── DEMO_RUNBOOK.md          # step-by-step: ngrok -> Vapi config -> test -> record
 ├── vapi/
 │   ├── system_prompt.txt        # production Vapi system prompt for Maya
 │   └── tool_definitions.json    # 5 tool schemas registered in Vapi

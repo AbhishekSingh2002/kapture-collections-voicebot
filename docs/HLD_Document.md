@@ -1,7 +1,7 @@
 # High-Level Design — Kapture Finance Collections Voicebot ("Maya")
 
-**Author:** [Your Name]
-**Date:** [Submission Date]
+**Author:** Abhishek Singh
+**Date:** August 13, 2026
 **Client:** Kapture Finance
 **Scope:** Outbound Voice AI Collections Agent (Task 1 deliverable for Kapture AI Delivery Intern assignment)
 
@@ -51,7 +51,7 @@ Telephony (PSTN/SIP) → Customer
 | STT | **Deepgram Nova-2** | Converts customer speech to text in near real time | Low latency (~200ms), strong performance on telephony-quality (8kHz) audio, good English + Hindi/Hinglish support | Streaming ASR, partial + final transcripts sent to the orchestrator | Whisper-based STT is more accurate but has higher latency and is not natively streamed inside Vapi |
 | Orchestrator LLM | **GPT-4o / GPT-4o-mini**, temperature `0.1` | Decides what Maya says next and when to call a tool | Strong instruction-following and function-calling reliability; low temperature reduces improvisation, which matters because this is a compliance-sensitive script, not a creative assistant | Receives system prompt + running transcript + state, returns either speech or a tool call | A higher-temperature or smaller model risks paraphrasing away compliance language (e.g., accidentally disclosing debt) |
 | TTS | **ElevenLabs / Cartesia** | Turns Maya's text into natural speech | Naturalness matters for a collections call — a robotic voice increases hang-ups; both integrate natively with Vapi | Streamed synthesis, sentence-by-sentence, to keep time-to-first-audio low | Standard cloud TTS (e.g., basic Polly) is faster to set up but sounds noticeably synthetic |
-| Backend | **Node.js + Express mock server** | Serves `verify_customer`, `log_promise_to_pay`, etc. | Assignment explicitly asks for mocked endpoints; Express is the fastest way to stand up a webhook in an evening | Vapi POSTs `tool-calls` events to `/webhook`; server returns `results` array | A real DB/backend would be over-engineering for a one-day mock and adds submission risk |
+| Backend | **Node.js + Express mock server** | Serves `verify_customer`, `log_promise_to_pay`, etc. | Assignment explicitly asks for mocked endpoints; Express is the fastest way to stand up a webhook in an evening | Each Vapi tool calls its matching REST endpoint under `/api/...`; the server returns the tool result as JSON | A real DB/backend would be over-engineering for a one-day mock and adds submission risk |
 
 *(Recommended Improvement, not required by the assignment: in production this would sit behind an API gateway with per-tenant auth, a real loan-management-system integration, and a proper datastore such as Postgres. Not built here — out of scope for the mock.)*
 
@@ -111,7 +111,7 @@ INIT → AUTH_PENDING → AUTHENTICATED → NEGOTIATION → PTP_COLLECTED
 **The non-negotiable rule:** the transition `AUTH_PENDING → AUTHENTICATED` is gated **only** by the tool response `verified: true`. The LLM cannot self-authorize this transition based on how confident the customer "sounds." This is enforced two ways, not one:
 
 1. **Prompt-level:** the system prompt explicitly forbids disclosure language prior to a successful tool result, and every disclosure line is written to depend on tool output, not the model's judgment.
-2. **Backend-level (the actual hard enforcement):** the mock webhook server keeps a `CALL_STATE` map keyed by the Vapi call session ID. A successful `verify_customer` is the only thing that sets `CALL_STATE[callId].authenticated = true`. Every protected tool (`log_promise_to_pay`, `send_payment_link`, `escalate_to_agent`) checks that flag *in code* before doing anything, and returns a hard `NOT_AUTHENTICATED` error if it isn't set — regardless of what the LLM sends. This means even if the model were talked into calling a protected tool early (e.g., via prompt injection), the backend independently refuses to execute it. `mark_disposition` is intentionally left unprotected, since dispositions like `WRONG_PERSON`, `DO_NOT_CALL`, and `NO_RESPONSE` are legitimate outcomes of calls that never reach authentication.
+2. **Backend-level (the actual hard enforcement):** the mock API server keeps a `CALL_STATE` map keyed by a call/session identifier supplied to the API when available. A successful `verify_customer` is the only thing that sets `CALL_STATE[callId].authenticated = true`. Every protected tool (`log_promise_to_pay`, `send_payment_link`, `escalate_to_agent`) checks that flag *in code* before doing anything, and returns a hard `NOT_AUTHENTICATED` error if it isn't set — regardless of what the LLM sends. This means even if the model were talked into calling a protected tool early (e.g., via prompt injection), the backend independently refuses to execute it. `mark_disposition` is intentionally left unprotected, since dispositions like `WRONG_PERSON`, `DO_NOT_CALL`, and `NO_RESPONSE` are legitimate outcomes of calls that never reach authentication.
 
 *(Recommended Improvement: in a full production system, this same state should also live in a durable store — e.g. Redis keyed by call ID — rather than an in-memory object that resets on server restart, and should be shared across horizontally-scaled webhook instances. See §9 Known Limitations.)*
 
@@ -259,3 +259,12 @@ INIT → AUTH_PENDING → AUTHENTICATED → NEGOTIATION → PTP_COLLECTED
 - Hindi/Hinglish handling depends on the STT/LLM's native multilingual ability; it hasn't been stress-tested against heavy code-switching or regional accents.
 - No real SMS/WhatsApp integration — `send_payment_link` is mocked.
 - No load testing; latency numbers above are the *target budget*, not measured production numbers.
+
+
+## 12. Actual Demo Configuration
+
+The working demo was configured in Vapi with OpenAI `gpt-4o-mini` at temperature `0.1`, Deepgram `nova-2` transcription, and a calm professional ElevenLabs/Cartesia voice. The five tools are configured as direct HTTP endpoints: `/api/verify_customer`, `/api/log_promise_to_pay`, `/api/send_payment_link`, `/api/escalate_to_agent`, and `/api/mark_disposition`. The demo was exposed through ngrok during testing.
+
+### Session-ID Limitation
+
+The REST tool payloads used in this demo did not consistently expose a stable Vapi call/session ID. The mock server therefore uses `call_id` or `session_id` when present and falls back to `missing-call-id`. Backend authentication gating was smoke-tested with an explicit shared `call_id`. A production implementation would explicitly propagate the platform call ID and store authentication state in Redis or another shared durable store.
